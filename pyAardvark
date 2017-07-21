@@ -1,0 +1,363 @@
+#!/usr/bin/env python
+#==========================================================================
+# Copyright 2009  Justin Searle & InGuardians Inc.
+# Copyright 2004  Total Phase, Inc.
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#==========================================================================
+
+#==========================================================================
+# IMPORTS
+#==========================================================================
+import sys,struct
+from optparse import OptionParser
+#from aardvark_py import *
+
+
+#==========================================================================
+# CONSTANTS
+#==========================================================================
+CHIPS = {
+    # Format is "ChipName" : ('bus_type', mem_length, page_size)
+    "AT25256" : ('spi', 32768, 64),     ## 
+    "AT25080" : ('spi', 1024, 32),      ## Aardvark Activity Board
+    '25AA128' : ('spi', 16384, 64),     ## 
+    '25LC128' : ('spi', 16384, 64),     ## Elster REX2
+    'ATMLH826': ('i2c', 265, 8),        ## Aardvark Activity Board
+    'AT24C02' : ('i2c', 265, 8),        ## 
+    }
+
+#==========================================================================
+# FUNCTIONS
+#==========================================================================
+def parseCommandLineFlags():
+
+    parser = OptionParser(usage="%prog <read|write|zero> [options]", version="%prog 0.3")
+
+    parser.add_option("-c", "--chip",
+                    help="specify chip to read or write to.  Available chips:\
+                    {0}".format(CHIPS) )
+
+    parser.add_option("-a", "--addr", type="int", default="0",
+                    help="starting address location (default %default)")
+    parser.add_option("-b", "--bus", default="SPI",
+                    help='use either "SPI" or "I2C" bus (default $default)')
+    parser.add_option("-f", "--filename",
+                    help="read or write data to FILE")
+    parser.add_option("-l", "--length", type="int", default="64",
+                    help="length of data to read or write in bytes (default %default)")
+    parser.add_option("-r", "--bitrate", type="int", default="500",
+                    help="clock bitrate to use in kbps (default %default)\n\
+                            SPI bus supports 1-8000 kbps\n\
+                            I2C bus supports 1-800 kbps (future fucntionality)")
+    parser.add_option("-m", "--mode", type="int", default="0",
+                    help="SPI mode of operation (default 0)\n\
+                            mode 0 : pol = 0, phase = 0 \n\
+                            mode 3 : pol = 1, phase = 1 \n\
+                            modes 1 and 2 are not supported")
+    parser.add_option("-s", "--slave", type="int", default="160",
+                    help="I2C slave device (default %default bytes)")
+    parser.add_option("-p", "--pagesize", type="int", default="64",
+                    help="maximum device page size for efficient writing (default %default bytes)")
+    parser.add_option("-P", "--port", type="int", default="0",
+                    help="port aardvark is located on (default %default)")
+    parser.add_option("-t", "--timeout", type="int", default="250",
+                    help="timeout for i2c bus (default %default)")
+    
+    parser.add_option("--stdin", action="store_true",
+                    help="read raw binary data in from stdin")
+    parser.add_option("--stdout", action="store_true",
+                    help="send raw binary data to stdout")
+    
+    parser.add_option('-v', '--verbose', action='count', default=0,
+                      help='Increase verbosity level')
+
+    if (len(sys.argv) == 1):
+        parser.print_help()
+        sys.exit()
+    
+    (options,args)=parser.parse_args()
+    return (options,args)
+    
+
+# def debug(level, message):
+#     # Print debug messages at the user specified verbosity level
+#     if level <= options.verbose:
+#         sys.stderr.write(message + '\n')
+#     return
+#
+#
+# def readStdin():
+#     # Read data from stdin
+#     debug(0, 'Reading binary data from stdin')
+#     print "Do Nothing"
+#
+#
+# def writeStdout():
+#     # Read data from stdin
+#     debug(0, 'Printing binary data to stdout')
+#     print "Do Nothing"
+#
+#
+# def readFile(filename):
+#     # Read binary file to writing to bus
+#     with open(filename, 'rb') as f:
+#         filedata = f.read()
+#         data = array('B', filedata)
+#         return (data)
+#
+#
+# def printAscii(addr, data):
+#     #Print data to stdout in hex+ASCII form
+#     debug(1,"Decoding data to hex and ascii")
+#     for i in xrange(0, len(data), 16):
+#         chars = data[i:i+16]
+#         hex = ' '.join(["%02x" % (x & 0xff) for x in chars])
+#         ascii = ''.join(chr(x) if len(repr(chr(x))) == 3 else '.' for x in chars)
+#         print("%07x: %s  %s" % (addr+i, hex, ascii))
+#
+#
+# def writeFile(data, filename):
+#     with open(filename, 'wb') as f:
+#         for i in range( len(data) ):
+#             valbyte = struct.pack("B", data[i])
+#             f.write(valbyte)
+#
+#
+# def spiRead(handle, addr, length):
+#     # Read data from SPI bus
+#     debug(1,'Reading data from the SPI bus')
+#     data_out = array('B', [ 0 for i in range(3+length) ])
+#     data_in  = array_u08(3+length)
+#
+#     # Assemble read command and address
+#     data_out[0] = 0x03
+#     data_out[1] = (addr >> 8) & 0xff
+#     data_out[2] = (addr >> 0) & 0xff
+#
+#     # Write length+3 bytes for data plus command and 2 address bytes
+#     (count, data_in) = aa_spi_write(handle, data_out, data_in)
+#     if (count < 0):
+#         debug(0, 'error: {0}\n'.format( aa_status_string(count) ) )
+#         return
+#     elif (count != length+3):
+#         debug(0, 'error: read {0:d} bytes (expected {1:d})'.format(count-3, length) )
+#
+#     # Remove the SPI header
+#     data_in = data_in[3:]
+#
+#     debug(0, '{0} bytes read from the {1} bus'.format( len(data_in), options.bus ) )
+#     debug(2, 'Data read: {0}'.format( ' '.join(["%02x" % (x & 0xff) for x in data_in]) ) )
+#     return(data_in)
+#
+#
+# def spiWrite(handle, addr, length, data, pagesize):
+#     debug(1,'Writing data to the SPI bus')
+#     n = 0
+#     while (n < len(data)):
+#         # Enable writing
+#         data_out = array('B', [ 0x06 ])
+#         (count, data_in) = aa_spi_write(handle, data_out, 0)
+#         if (count < 0):
+#             print "error: %s\n" % aa_status_string(count)
+#             return
+#         elif (count != 1):
+#             print "error: read %d bytes (expected %d)" % (count, 1)
+#
+#         # Assemble and write data
+#         data_out = array('B', [ 0 for i in range(3 + pagesize) ] )
+#         data_out[0] = 0x02
+#         data_out[1] = (n >> 8) & 0xff
+#         data_out[2] = (n >> 0) & 0xff
+#
+#         # Assemble a page of data
+#         data_out[3:] = data[n:n+pagesize]
+#
+#         n += len(data_out) - 3
+#
+#         # Write the transaction
+#         (count, data_in) = aa_spi_write(handle, data_out, 0)
+#         if (count < 0):
+#             print "error: %s\n" % aa_status_string(count)
+#             return
+#         elif (count != len(data_out)):
+#             print "error: read %d bytes (expected %d)" % (count-3, len(data_out))
+#
+#         aa_sleep_ms(10)
+#
+#
+# def i2cRead(handle, slave, addr, length):
+#     # Write the address
+#     aa_i2c_write(handle, slave, AA_I2C_NO_STOP, array('B', [addr & 0xff]))
+#
+#     (count, data_in) = aa_i2c_read(handle, slave, AA_I2C_NO_FLAGS, length)
+#     if (count < 0):
+#         print "error: %s" % aa_status_string(count)
+#         return
+#     elif (count == 0):
+#         print "error: no bytes read"
+#         print "  are you sure you have the right slave address?"
+#         return
+#     elif (count != length):
+#         print "error: read %d bytes (expected %d)" % (count, length)
+#     return(data_in)
+#
+#
+# def i2cWrite(handle, slave, addr, length, zero):
+#     # Write to the I2C EEPROM
+#     #
+#     # The AT24C02 EEPROM has 8 byte pages.  Data can written
+#     # in pages, to reduce the number of overall I2C transactions
+#     # executed through the Aardvark adapter.
+#     n = 0
+#     while (n < length):
+#         data_out = array('B', [ 0 for i in range(1+PAGE_SIZE) ])
+#
+#         # Fill the packet with data
+#         data_out[0] = addr & 0xff
+#
+#         # Assemble a page of data
+#         i = 1
+#         while 1:
+#             if not (zero): data_out[i] = n & 0xff
+#
+#             addr = addr + 1
+#             n = n +1
+#             i = i+1
+#
+#             if not (n < length and (addr & (PAGE_SIZE-1)) ): break
+#
+#         # Truncate the array to the exact data size
+#         del data_out[i:]
+#
+#         # Write the address and data
+#         aa_i2c_write(handle, slave, AA_I2C_NO_FLAGS, data_out)
+#         aa_sleep_ms(10)
+#
+#
+# def openDevice(bus, port, mode, bitrate, timeout):
+#     # Connect to Aardvark                   ##### TODO: have it autodetect port or err with available ports
+#     handle = aa_open(port)
+#     if (handle <= 0):
+#         debug(0, 'Unable to open Aardvark on port {0:d}'.format(options.port) )
+#         debug(0, 'Error code = {0:d}'.format(handle) )
+#         sys.exit()
+#
+#     # Ensure that the SPI subsystem is enabled
+#     aa_configure(handle,  AA_CONFIG_SPI_I2C)
+#
+#     # Enable the I2C bus pullup resistors (2.2k resistors).
+#     # This command is only effective on v2.0 hardware or greater.
+#     # The pullup resistors on the v1.02 hardware are enabled by default.
+#     if bus == 'i2c':
+#         aa_i2c_pullup(handle, AA_I2C_PULLUP_BOTH)
+#
+#     # Power the EEPROM using the Aardvark v2.0+ adapter's power supply.
+#     aa_target_power(handle, AA_TARGET_POWER_BOTH)
+#
+#     # Setup the clock phase
+#     aa_spi_configure(handle, mode >> 1, mode & 1, AA_SPI_BITORDER_MSB)
+#
+#     # Set the bitrate and timeout
+#     if bus == 'spi':
+#         realbitrate = aa_spi_bitrate(handle, bitrate)
+#     elif bus == 'i2c':
+#         realbitrate = aa_i2c_bitrate(handle, bitrate)
+#         realtimeout = aa_i2c_bus_timeout(handle, timeout)
+#
+#     if realbitrate != bitrate:
+#         debug(0, 'Bitrate was changed from {0:d}kHz to {1:d}kHz'.format(bitrate, realbitrate) )
+#     if realtimeout != timeout:
+#         debug(0, 'Timeout was changed from {0:d}ms to {1:d}ms'.format(timeout, realtimeout) )
+#
+#
+#     return(handle)
+#
+#
+#==========================================================================
+# MAIN PROGRAM
+#==========================================================================
+
+# Read and parse the command line flags
+(options,args) = parseCommandLineFlags()
+command = args[0].lower()
+
+
+# # Determine bus type, memory length, and page size
+# if options.chip:
+#     if (not CHIPS.has_key( options.chip.upper() )):
+#         print "%s is not a supported device" % options.chip
+#         sys.exit()
+#     (options.bus, options.length, options.pagesize) = DEVICES[device]
+#
+#
+# # Connecting to Aardvark
+# debug(1, 'Accessing aardvark on port {0} via the {1} bus at a bitrate of {2}'.format(options.port, options.bus, options.bitrate) )
+# handle = openDevice(options.bus, options.port, options.mode, options.bitrate, options.timeout)  ### Need to fix mode for i2c
+#
+#
+# # Execute read command
+# if (command == "read"):
+#     if options.bus == 'spi':
+#         data = spiRead(handle, options.addr, options.length)
+#     elif options.bus == 'i2c':
+#         data = i2cRead(handle, options.slave, options.addr, options.length)
+#
+#     # Write data to file, stdout, or decode as ASCII
+#     if options.filename:
+#         writeFile(data, options.filename)
+#     elif options.stdout:
+#         writeStdout()
+#     else:
+#         printAscii(options.addr, data)
+#
+#
+# # Execute write command
+# elif (command == "write"):
+#
+#     # Determine source of data
+#     if options.filename:
+#         data = readFile(options.filename)
+#     elif options.stdin:
+#         data = _readStdin()
+#     else:
+#         debug(0,'No input data specified.  Please specify "-f filename" or "--stdin"')
+#         aa_close(handle)
+#         sys.exit()
+#
+#     # If user is sure, write to bus, else exit without writing.
+#     debug(0, 'Write {0} bytes of data to the {1} bus? (yes/no) '.format(len(data), options.bus) )
+#     if raw_input().lower() == 'yes':
+#         if options.bus == 'spi':
+#             spiWrite(handle, options.addr, len(data), data, options.pagesize)
+#         elif options.bus == 'i2c':
+#             i2cWrite(handle, options.slave, options.addr, options.length, data)
+#         debug(1, 'Data successfully written to the {0} bus'.format(bus) )
+#     else:
+#         debug(0, 'Exiting program without writing.  You must enter "yes" to continue.')
+#
+#
+# # Execute zero command
+# elif (command == "zero"):
+#     debug(1, 'Attemping to zero out EEPROM')
+#     spiWrite(handle, options.addr, options.length, 1)
+#     debug(0, 'Zeroed EEPROM')
+#
+# else:
+#     debug(0, 'unknown command: {0}'.format(command) )
+#
+#
+# # Close the device
+# aa_target_power(handle, AA_TARGET_POWER_NONE)
+# aa_close(handle)
